@@ -1,25 +1,31 @@
 import {
   Application,
   createAppAuth,
+  dotenvLoad,
   Logger,
+  nanoid,
   NodeRSA,
   Octokit,
   Router,
   Status,
   verify,
-  nanoid
 } from "./deps.ts";
 import type { RouterContext } from "./deps.ts";
 import { Context } from "https://deno.land/x/oak@v11.1.0/mod.ts";
+const ENVIRONMENT = Deno.env.get("ENVIRONMENT");
+
+await dotenvLoad({
+  envPath: `./.env.${ENVIRONMENT}`,
+  examplePath: "./.env.example",
+  allowEmptyValues: true,
+  export: true
+});
 
 const PORT = Number(Deno.env.get("PORT")) || 3000;
-const GH_APP_ID = Number(Deno.env.get("GH_APP_ID")) || 298915;
-const GH_APP_SECRET = Deno.env.get("GH_APP_SECRET") || "secret";
-
-let GH_PRIVATE_KEY = Deno.env.get("GH_PRIVATE_KEY");
-if (!GH_PRIVATE_KEY) {
-  GH_PRIVATE_KEY = NodeRSA.default(Deno.readTextFileSync("./private-key.pem")).exportKey("pkcs8-private-pem");
-}
+const GH_APP_ID = Number(Deno.env.get("GH_APP_ID"));
+const GH_APP_SECRET = Deno.env.get("GH_APP_SECRET");
+const envPrivateKey = Deno.env.get("GH_PRIVATE_KEY");
+const GH_PRIVATE_KEY = NodeRSA.default(envPrivateKey).exportKey("pkcs8-private-pem");
 
 Logger.setup({
   handlers: {
@@ -42,7 +48,7 @@ const octokit: Octokit = new Octokit({
   auth: {
     appId: GH_APP_ID,
     privateKey: GH_PRIVATE_KEY,
-    installationId: nanoid()
+    installationId: nanoid(),
   },
   webhooks: {
     secret: GH_APP_SECRET,
@@ -51,19 +57,24 @@ const octokit: Octokit = new Octokit({
 
 console.log(await octokit.rest.apps.getAuthenticated());
 
-const validateWebhookHeader = () => async (ctx: Context, next: () => unknown) => {
-  const {request: req } = ctx;
-  if (!req.hasBody) {
-    ctx.throw(Status.BadRequest, "Bad Request");
-  }
-  const body = await req.body().value;
-  const signature = req.headers.get("X-Hub-Signature-256")!;
-  const verified = await verify(GH_APP_SECRET, JSON.stringify(body), signature);
-  if (!verified) {
-    ctx.throw(Status.Forbidden, "Invalid Credentials")
-  }
-  await next();
-};
+const validateWebhookHeader =
+  () => async (ctx: Context, next: () => unknown) => {
+    const { request: req } = ctx;
+    if (!req.hasBody) {
+      ctx.throw(Status.BadRequest, "Bad Request");
+    }
+    const body = await req.body().value;
+    const signature = req.headers.get("X-Hub-Signature-256")!;
+    const verified = await verify(
+      GH_APP_SECRET,
+      JSON.stringify(body),
+      signature
+    );
+    if (!verified) {
+      ctx.throw(Status.Forbidden, "Invalid Credentials");
+    }
+    await next();
+  };
 
 const router = new Router();
 
